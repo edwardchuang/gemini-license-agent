@@ -18,6 +18,8 @@
 
 import os
 from typing import List, Optional, Dict, Any
+from datetime import datetime, timezone, timedelta
+from dateutil.parser import parse as parse_datetime
 
 from google.adk.agents.llm_agent import Agent
 from google.cloud import discoveryengine_v1
@@ -188,6 +190,70 @@ def revoke_license(user_id: str, license_config_path: Optional[str] = None) -> d
     return type(response).to_dict(response)
 
 
+def release_stale_licenses(stale_after_days: int) -> dict:
+    """Identifies and revokes licenses that have not been used recently.
+
+    This tool finds users who have not logged in for a specified number of
+    days and revokes their licenses to free up capacity.
+
+    Args:
+        stale_after_days: The number of days of inactivity after which a
+                          license is considered stale and should be revoked.
+
+    Returns:
+        A dictionary summarizing the actions taken, including a list of users
+        whose licenses were revoked.
+    """
+    now = datetime.now(timezone.utc)
+    stale_threshold = now - timedelta(days=stale_after_days)
+    revoked_users = []
+    errors = []
+
+    try:
+        all_licenses = list_licenses()
+    except Exception as e:
+        return {"error": f"Failed to retrieve license list: {e}"}
+
+    for license_info in all_licenses:
+        user_id = license_info.get("user_principal")
+        last_login_str = license_info.get("last_login_time")
+        license_config = license_info.get("license_config")
+
+        if not all([user_id, last_login_str, license_config]):
+            errors.append(f"Skipping license with missing data: {license_info}")
+            continue
+
+        try:
+            last_login_time = parse_datetime(last_login_str)
+        except (ValueError, TypeError):
+            errors.append(
+                f"Skipping user '{user_id}' due to invalid last_login_time: "
+                f"'{last_login_str}'"
+            )
+            continue
+
+        if last_login_time < stale_threshold:
+            print(
+                f"Found stale license for user {user_id} (last login: "
+                f"{last_login_time.strftime('%Y-%m-%d')}). Revoking..."
+            )
+            try:
+                revoke_license(user_id=user_id, license_config_path=license_config)
+                revoked_users.append(user_id)
+            except Exception as e:
+                errors.append(f"Failed to revoke license for '{user_id}': {e}")
+
+    if not revoked_users and not errors:
+        return {"status": "No stale licenses found.", "revoked_count": 0}
+
+    return {
+        "status": f"Completed license reclamation.",
+        "revoked_count": len(revoked_users),
+        "revoked_users": revoked_users,
+        "errors": errors,
+    }
+
+
 def list_subscriptions() -> dict:
     """Lists all available subscriptions and their usage stats.
 
@@ -275,6 +341,13 @@ root_agent = Agent(
     *   Intelligently guide the user to choose a valid option – one that is `ACTIVE` and has available seats.
     *   Never grant a license without first confirming availability through usage stats.
 
+*   **Reclaiming Stale Licenses:**
+    *   You can automatically reclaim licenses from inactive users by using the
+        `release_stale_licenses` tool.
+    *   This tool requires you to specify the number of days of inactivity that
+        define a "stale" license. For example, using `90` would target users
+        who haven't logged in for 90 days or more.
+
 *   **User Safety:**
     *   Granting and revoking are critical operations. Always confirm the user's 
         intent with a clear confirmation prompt before proceeding.
@@ -291,5 +364,6 @@ root_agent = Agent(
         grant_license,
         revoke_license,
         list_subscriptions,
+        release_stale_licenses,
     ],
 )

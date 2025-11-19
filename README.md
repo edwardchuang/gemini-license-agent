@@ -1,6 +1,6 @@
 # NotebookLM / Gemini Enterprise License Management Agent
 
-This project provides an ADK powered agent for managing enterprise licenses through the Google Cloud Discovery Engine API. It's designed to offer a robust, interactive command-line interface for listing subscriptions, and granting or revoking user licenses for NotebookLM / Gemini Enterprise ecosystems.
+This project provides an ADK-powered agent for managing enterprise licenses through the Google Cloud Discovery Engine API. It's designed to offer a robust, interactive command-line interface for listing subscriptions, granting, and revoking user licenses for NotebookLM / Gemini Enterprise ecosystems.
 
 ## Overview
 
@@ -19,6 +19,7 @@ The agent exposes the following primary functions:
 -   **`list_subscriptions()`**: Lists all available license subscriptions and their usage statistics.
 -   **`grant_license(user_id, license_config_path)`**: Grants a license to a specified user from a specified subscription.
 -   **`revoke_license(user_id, license_config_path)`**: Revokes a license from a specified user.
+-   **`release_stale_licenses(stale_after_days)`**: Revokes licenses from users who have been inactive for a specified number of days.
 
 ## Setup & Configuration
 
@@ -84,8 +85,9 @@ Example commands:
 -   **`list subscriptions`** - list subscriptions and seat usage status
 -   **`assign license to <user/principle>`** - assign license to a user
 -   **`revoke <user/principle>`** - revoke license of a user
+-   **`release stale license after <X> days of inactivity`** -- release license on users those last login longer than X days
 
-Disclaimler: 
+## Disclaimer
 
 This is not an officially supported Google product. 
 This project is intended for demonstration purposes only. It is not

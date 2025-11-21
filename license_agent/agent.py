@@ -21,6 +21,11 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 from dateutil.parser import parse as parse_datetime
 
+import logging
+
+# --- Configuration & Logging ---
+logger = logging.getLogger(__name__)
+
 from google.adk.agents.llm_agent import Agent
 from google.cloud import discoveryengine_v1
 import google.auth
@@ -51,11 +56,11 @@ def _create_authed_session() -> Optional[auth_requests.AuthorizedSession]:
         )
         return auth_requests.AuthorizedSession(credentials)
     except google.auth.exceptions.DefaultCredentialsError as e:
-        print(f"Error getting default credentials: {e}")
+        logger.error(f"Error getting default credentials: {e}")
         return None
     except Exception as e:
         # Catch any other unexpected errors during credential loading.
-        print(f"An unexpected error occurred during authentication: {e}")
+        logger.error(f"An unexpected error occurred during authentication: {e}")
         return None
 
 
@@ -80,14 +85,14 @@ def _get_subscription_details(
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"Error calling REST API: {e}")
+        logger.error(f"Error calling REST API: {e}")
         if e.response is not None:
-            print(f"Response status: {e.response.status_code}")
-            print(f"Response content: {e.response.text}")
+            logger.error(f"Response status: {e.response.status_code}")
+            logger.error(f"Response content: {e.response.text}")
         return None
     except Exception as e:
         # Catch any other unexpected errors during the API request.
-        print(f"An unexpected error occurred: {e}")
+        logger.error(f"An unexpected error occurred: {e}")
         return None
 
 
@@ -199,6 +204,8 @@ def release_stale_licenses(stale_after_days: int) -> dict:
     Args:
         stale_after_days: The number of days of inactivity after which a
                           license is considered stale and should be revoked.
+                          Set to -1 to revoke licenses for users who have
+                          never logged in.
 
     Returns:
         A dictionary summarizing the actions taken, including a list of users
@@ -219,8 +226,24 @@ def release_stale_licenses(stale_after_days: int) -> dict:
         last_login_str = license_info.get("last_login_time")
         license_config = license_info.get("license_config")
 
-        if not all([user_id, last_login_str, license_config]):
-            errors.append(f"Skipping license with missing data: {license_info}")
+        if not user_id or not license_config:
+            errors.append(f"Skipping license with missing user_id or config: {license_info}")
+            continue
+
+        # Handle "Never Logged In" case (stale_after_days == -1)
+        if stale_after_days == -1:
+            if not last_login_str:
+                logger.info(f"Found user {user_id} who has never logged in. Revoking...")
+                try:
+                    revoke_license(user_id=user_id, license_config_path=license_config)
+                    revoked_users.append(user_id)
+                except Exception as e:
+                    errors.append(f"Failed to revoke license for '{user_id}': {e}")
+            continue
+
+        # Handle "Stale" case (stale_after_days > 0)
+        if not last_login_str:
+            # If checking for staleness, skip users who have never logged in (or handle differently if desired)
             continue
 
         try:
@@ -233,7 +256,7 @@ def release_stale_licenses(stale_after_days: int) -> dict:
             continue
 
         if last_login_time < stale_threshold:
-            print(
+            logger.info(
                 f"Found stale license for user {user_id} (last login: "
                 f"{last_login_time.strftime('%Y-%m-%d')}). Revoking..."
             )
@@ -282,7 +305,7 @@ def list_subscriptions() -> dict:
         data = response.json()
 
         if "licenseConfigUsageStats" not in data or not data["licenseConfigUsageStats"]:
-            print("  No subscriptions usage stats found.")
+            logger.info("  No subscriptions usage stats found.")
             return {"subscriptions": []}
 
         for stats in data["licenseConfigUsageStats"]:
@@ -294,7 +317,7 @@ def list_subscriptions() -> dict:
             if not subscription_details:
                 # Log or handle the case where details for a specific
                 # config could not be fetched.
-                print(f"Could not fetch details for {full_name}. Skipping.")
+                logger.warning(f"Could not fetch details for {full_name}. Skipping.")
                 continue
 
             subscriptions_data.append({
@@ -322,7 +345,7 @@ def list_subscriptions() -> dict:
 # --- Agent Definition ---
 
 root_agent = Agent(
-    model="gemini-2.5-flash",
+    model="gemini-3-pro-preview",
     name="gemini_license_agent",
     description="Manages Gemini Enterprise / NotebookLM Enterprise licenses.",
     instruction="""
